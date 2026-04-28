@@ -175,3 +175,230 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+"""
+Spamhaus Project API Client
+Fetches threat intelligence data from Spamhaus blocklists
+"""
+
+import requests
+import socket
+import json
+import os
+from datetime import datetime
+
+# Spamhaus API Configuration
+SPAMHAUS_API_KEY = os.environ.get("SPAMHAUS_API_KEY", "")
+SPAMHAUS_DROP_URL = "https://www.spamhaus.org/drop/drop.txt"
+SPAMHAUS_DROP_V6_URL = "https://www.spamhaus.org/drop/dropv6.txt"
+SPAMHAUS_EBL_URL = "https://www.spamhaus.org/ebl/ebl.txt"
+SPAMHAUS_API_URL = "https://apidata.spamhaus.org/api/v1"
+
+
+def fetch_drop_list():
+    """
+    Fetch the Spamhaus DROP (Don't Route Or Peer) list.
+    This list contains netblocks that are hijacked or leased by spammers/malware operators.
+    
+    Returns:
+        List of IP ranges or None on error
+    """
+    try:
+        response = requests.get(SPAMHAUS_DROP_URL, timeout=30)
+        response.raise_for_status()
+        
+        lines = response.text.strip().split("\n")
+        ip_ranges = []
+        
+        for line in lines:
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith(";"):
+                continue
+            # Extract IP range (first field before any comment)
+            ip_range = line.split(";")[0].strip()
+            if ip_range:
+                ip_ranges.append(ip_range)
+        
+        return ip_ranges
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching DROP list: {e}")
+        return None
+
+
+def fetch_dropv6_list():
+    """
+    Fetch the Spamhaus DROPv6 (IPv6) list.
+    
+    Returns:
+        List of IPv6 ranges or None on error
+    """
+    try:
+        response = requests.get(SPAMHAUS_DROP_V6_URL, timeout=30)
+        response.raise_for_status()
+        
+        lines = response.text.strip().split("\n")
+        ip_ranges = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith(";"):
+                continue
+            ip_range = line.split(";")[0].strip()
+            if ip_range:
+                ip_ranges.append(ip_range)
+        
+        return ip_ranges
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching DROPv6 list: {e}")
+        return None
+
+
+def fetch_ebl_list():
+    """
+    Fetch the Spamhaus EBL (Email Block List).
+    
+    Returns:
+        List of IP addresses or None on error
+    """
+    try:
+        response = requests.get(SPAMHAUS_EBL_URL, timeout=30)
+        response.raise_for_status()
+        
+        lines = response.text.strip().split("\n")
+        ip_addresses = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith(";"):
+                continue
+            ip_addr = line.split(";")[0].strip()
+            if ip_addr:
+                ip_addresses.append(ip_addr)
+        
+        return ip_addresses
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching EBL list: {e}")
+        return None
+
+
+def check_ip_in_spamhaus(ip_address, list_type="SBL"):
+    """
+    Check if an IP is listed in a specific Spamhaus blocklist using the API.
+    
+    Args:
+        ip_address: The IP address to check
+        list_type: The blocklist to check (SBL, XBL, PBL, DBL, SBLCSS)
+    
+    Returns:
+        JSON response with listing info or None on error
+    """
+    if not SPAMHAUS_API_KEY:
+        print("Warning: SPAMHAUS_API_KEY not set. Using DNS-based lookup instead.")
+        return check_ip_dns(ip_address, list_type)
+    
+    endpoint = f"{SPAMHAUS_API_URL}/check/{list_type}/{ip_address}"
+    params = {"data": "yes"}
+    headers = {"Authorization": f"Bearer {SPAMHAUS_API_KEY}"}
+    
+    try:
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error checking IP {ip_address}: {e}")
+        return None
+
+
+def check_ip_dns(ip_address, list_type="SBL"):
+    """
+    Check if an IP is listed using DNS-based lookup (free method).
+    
+    Args:
+        ip_address: The IP address to check
+        list_type: The blocklist to check
+    
+    Returns:
+        True if listed, False if not, None on error
+    """
+    # Reverse the IP address for DNS query
+    try:
+        reversed_ip = ".".join(reversed(ip_address.split(".")))
+        query = f"{reversed_ip}.{list_type.lower()}.dbl.spamhaus.org"
+        
+        result = socket.resolve(query)
+        return result is not None
+    except socket.gaierror as e:
+        # NXDOMAIN means not listed
+        if e.errno == 8:  # DNS name does not exist
+            return False
+        print(f"DNS lookup error: {e}")
+        return None
+    except Exception as e:
+        print(f"Error checking IP via DNS: {e}")
+        return None
+
+
+def fetch_all_drop_lists():
+    """
+    Fetch all DROP lists (IPv4 and IPv6).
+    
+    Returns:
+        Dictionary with 'ipv4' and 'ipv6' lists
+    """
+    result = {
+        "ipv4": fetch_drop_list(),
+        "ipv6": fetch_dropv6_list()
+    }
+    return result
+
+
+def main():
+    """Example usage of the Spamhaus API client."""
+    
+    print("Fetching Spamhaus DROP list...")
+    drop_list = fetch_drop_list()
+    
+    if drop_list:
+        print(f"\nFound {len(drop_list)} IPv4 ranges in DROP list:")
+        for ip_range in drop_list[:10]:  # Show first 10
+            print(f"  - {ip_range}")
+        if len(drop_list) > 10:
+            print(f"  ... and {len(drop_list) - 10} more")
+    else:
+        print("No DROP list retrieved or error occurred")
+    
+    print("\n" + "="*50 + "\n")
+    
+    print("Fetching Spamhaus DROPv6 list...")
+    dropv6_list = fetch_dropv6_list()
+    
+    if dropv6_list:
+        print(f"\nFound {len(dropv6_list)} IPv6 ranges in DROPv6 list:")
+        for ip_range in dropv6_list[:10]:  # Show first 10
+            print(f"  - {ip_range}")
+        if len(dropv6_list) > 10:
+            print(f"  ... and {len(dropv6_list) - 10} more")
+    else:
+        print("No DROPv6 list retrieved or error occurred")
+    
+    print("\n" + "="*50 + "\n")
+    
+    print("Fetching Spamhaus EBL list...")
+    ebl_list = fetch_ebl_list()
+    
+    if ebl_list:
+        print(f"\nFound {len(ebl_list)} IPs in EBL list:")
+        for ip_addr in ebl_list[:10]:  # Show first 10
+            print(f"  - {ip_addr}")
+        if len(ebl_list) > 10:
+            print(f"  ... and {len(ebl_list) - 10} more")
+    else:
+        print("No EBL list retrieved or error occurred")
+
+
+if __name__ == "__main__":
+    main()
